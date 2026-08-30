@@ -3,10 +3,7 @@ resource "aws_instance" "test" {
   ami           = data.aws_ami.amazon_linux.id
   instance_type = "t3.micro"
 
-  subnet_id = aws_subnet.public_a.id
-
-  # Assign a public IPv4 address so the instance can be reached from the Internet.
-  associate_public_ip_address = true
+  subnet_id = aws_subnet.private_a.id
 
   # Attach the Security Group created for public resources.
   vpc_security_group_ids = [
