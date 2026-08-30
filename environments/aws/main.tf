@@ -19,7 +19,6 @@ resource "aws_subnet" "public_a" {
 }
 
 # Public subnet in Availability Zone B.
-# A second AZ provides basic high-availability across zones.
 resource "aws_subnet" "public_b" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.2.0/24"
@@ -29,6 +28,31 @@ resource "aws_subnet" "public_b" {
     Name = "devops-lab-public-b"
   }
 }
+
+resource "aws_subnet" "private_a" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.10.0/24"
+  availability_zone = "eu-central-1a"
+
+  tags = {
+    Name = "devops-lab-private-a"
+  }
+}
+
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "devops-lab-private"
+  }
+}
+
+resource "aws_route_table_association" "private_a" {
+  subnet_id      = aws_subnet.private_a.id
+  route_table_id = aws_route_table.private.id
+}
+
 
 # Internet Gateway provides a path between the VPC and the Internet.
 resource "aws_internet_gateway" "main" {
