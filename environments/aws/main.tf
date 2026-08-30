@@ -7,6 +7,7 @@ resource "aws_vpc" "main" {
   }
 }
 
+
 # Public subnet in Availability Zone A.
 resource "aws_subnet" "public_a" {
   vpc_id            = aws_vpc.main.id
@@ -14,18 +15,7 @@ resource "aws_subnet" "public_a" {
   availability_zone = "eu-central-1a"
 
   tags = {
-    Name = "devops-lab-public-a"
-  }
-}
-
-# Public subnet in Availability Zone B.
-resource "aws_subnet" "public_b" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.2.0/24"
-  availability_zone = "eu-central-1b"
-
-  tags = {
-    Name = "devops-lab-public-b"
+    Name = "public-subnet-a"
   }
 }
 
@@ -35,17 +25,60 @@ resource "aws_subnet" "private_a" {
   availability_zone = "eu-central-1a"
 
   tags = {
-    Name = "devops-lab-private-a"
+    Name = "private-subnet-a"
   }
 }
 
+
+# Public subnet in Availability Zone B.
+resource "aws_subnet" "public_b" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.2.0/24"
+  availability_zone = "eu-central-1b"
+
+  tags = {
+    Name = "public-subnet-b"
+  }
+}
+
+resource "aws_subnet" "private_b" {
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.0.11.0/24"
+  availability_zone = "eu-central-1b"
+
+  tags = {
+    Name = "private-subnet-b"
+  }
+}
+
+
+# Route table for public subnets.
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "public-route-table"
+  }
+}
 
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "devops-lab-private"
+    Name = "private-route-table"
   }
+}
+
+
+# Associate subnet A with the public route table.
+resource "aws_route_table_association" "public_a" {
+  subnet_id      = aws_subnet.public_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id
 }
 
 resource "aws_route_table_association" "private_a" {
@@ -53,22 +86,28 @@ resource "aws_route_table_association" "private_a" {
   route_table_id = aws_route_table.private.id
 }
 
-# Add elastic IP for domain vpc
+resource "aws_route_table_association" "private_b" {
+  subnet_id      = aws_subnet.private_b.id
+  route_table_id = aws_route_table.private.id
+}
+
+# Elastic IP address for the NAT Gateway.
 resource "aws_eip" "nat" {
   domain = "vpc"
 
   tags = {
-    Name = "devops-lab-nat-eip"
+    Name = "nat-eip"
   }
 }
 
 # Create a NAT Gateway in the public subnet to allow outbound Internet access for private subnets.
+# Just for subnet A, lower cost, but another NAT Gateway can be created in subnet B for high availability.
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public_a.id
 
   tags = {
-    Name = "devops-lab-nat"
+    Name = "nat-gateway"
   }
 }
 
@@ -85,18 +124,10 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "devops-lab-igw"
+    Name = "internet-gateway"
   }
 }
 
-# Route table for public subnets.
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "devops-lab-public"
-  }
-}
 
 # Send Internet-bound traffic from public subnets through the Internet Gateway.
 resource "aws_route" "public_internet" {
@@ -105,14 +136,4 @@ resource "aws_route" "public_internet" {
   gateway_id             = aws_internet_gateway.main.id
 }
 
-# Associate subnet A with the public route table.
-resource "aws_route_table_association" "public_a" {
-  subnet_id      = aws_subnet.public_a.id
-  route_table_id = aws_route_table.public.id
-}
 
-# Associate subnet B with the public route table.
-resource "aws_route_table_association" "public_b" {
-  subnet_id      = aws_subnet.public_b.id
-  route_table_id = aws_route_table.public.id
-}
