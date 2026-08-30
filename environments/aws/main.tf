@@ -53,6 +53,32 @@ resource "aws_route_table_association" "private_a" {
   route_table_id = aws_route_table.private.id
 }
 
+# Add elastic IP for domain vpc
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "devops-lab-nat-eip"
+  }
+}
+
+# Create a NAT Gateway in the public subnet to allow outbound Internet access for private subnets.
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public_a.id
+
+  tags = {
+    Name = "devops-lab-nat"
+  }
+}
+
+# add a route to the private route table that directs Internet-bound traffic to the NAT Gateway.
+resource "aws_route" "private_nat" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main.id
+}
+
 
 # Internet Gateway provides a path between the VPC and the Internet.
 resource "aws_internet_gateway" "main" {
