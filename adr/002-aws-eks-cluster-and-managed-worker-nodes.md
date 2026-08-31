@@ -18,8 +18,13 @@ AWS IAM is used to provide separate identities and permissions for:
 
 - EKS Control Plane
 - EKS worker nodes
+- Kubernetes workloads that require access to AWS APIs
 
-The goal is to keep the responsibilities and permissions of the control plane and worker nodes separate.
+The goal is to keep the responsibilities and permissions of the control plane, worker nodes, and Kubernetes workloads separate.
+
+During the initial EKS setup, the AWS VPC CNI plugin was unable to initialize because the `aws-node` DaemonSet did not have the required AWS permissions.
+
+The cluster was therefore configured to use EKS Pod Identity for the AWS VPC CNI plugin.
 
 ---
 
@@ -31,6 +36,9 @@ Use Amazon EKS with:
 - EKS Managed Node Group
 - dedicated IAM Role for the EKS Control Plane
 - dedicated IAM Role for EKS worker nodes
+- dedicated IAM Role for the AWS VPC CNI
+- EKS Pod Identity for the AWS VPC CNI
+- EKS Pod Identity Agent add-on
 - worker nodes deployed in private subnets
 - worker nodes distributed across two Availability Zones
 
@@ -40,19 +48,23 @@ Current architecture:
     |
     +-- AWS-managed Control Plane
     |
+    +-- EKS Pod Identity Agent
+    |
     +-- Managed Node Group
         |
         +-- EC2 Node
         |
         +-- EC2 Node
 
-Worker nodes are deployed into:
+The AWS VPC CNI runs as a Kubernetes DaemonSet:
 
-    private_a
-    eu-central-1a
+    kube-system
+        |
+        +-- aws-node
+            |
+            +-- AWS VPC CNI
 
-    private_b
-    eu-central-1b
+The `aws-node` ServiceAccount receives AWS permissions through EKS Pod Identity.
 
 ---
 
@@ -74,7 +86,7 @@ The role contains:
         |
         | EKS can assume the role
         v
-    eks.amazonaws.com
+        eks.amazonaws.com
 
 The role has:
 
@@ -92,7 +104,7 @@ Mental model:
             v
         AWS APIs
 
-The Cluster IAM Role is not used by worker nodes.
+The Cluster IAM Role is not used by worker nodes or Kubernetes workloads.
 
 ---
 
@@ -133,6 +145,8 @@ Mental model:
 
 The Node IAM Role is separate from the EKS Cluster IAM Role.
 
+The Node IAM Role is also separate from the IAM Role used by the AWS VPC CNI through EKS Pod Identity.
+
 ---
 
 ## IAM Mental Model
@@ -171,6 +185,14 @@ For worker nodes:
     Permissions:
     AmazonEKSWorkerNodePolicy
     AmazonEC2ContainerRegistryPullOnly
+
+For the AWS VPC CNI:
+
+    Trust:
+    pods.eks.amazonaws.com
+
+    Permissions:
+    AmazonEKS_CNI_Policy
 
 Trust and permissions are separate concepts.
 
@@ -286,68 +308,293 @@ This allows nodes in private subnets to reach external services without exposing
 
 ---
 
-## Control Plane vs Worker Nodes
+## AWS VPC CNI
 
-EKS separates the Kubernetes Control Plane from worker nodes.
+EKS uses the AWS VPC CNI as the Kubernetes networking plugin.
 
-The Control Plane is AWS-managed.
+The CNI is deployed as a DaemonSet:
 
-The worker nodes are EC2 instances managed through the EKS Managed Node Group.
-
-Architecture:
-
-    AWS
-    |
-    +-- EKS Control Plane
-    |       |
-    |       +-- Kubernetes API
-    |       +-- Kubernetes control components
-    |
-    +-- EC2 Worker Nodes
+    kube-system
+        |
+        +-- aws-node
             |
-            +-- kubelet
-            +-- container runtime
-            +-- Kubernetes workloads
+            +-- one Pod per worker node
 
-The Control Plane and worker nodes use different IAM Roles.
+The AWS VPC CNI is responsible for providing Kubernetes Pods with networking integrated with the AWS VPC.
+
+It requires permissions to interact with AWS networking resources, including EC2 network interfaces.
+
+During the initial setup, the `aws-node` Pod reported:
+
+    MissingIAMPermissions
+
+and specifically:
+
+    Unauthorized operation:
+    failed to call ec2:DescribeNetworkInterfaces
+    due to missing permissions
+
+As a result, the worker node reported:
+
+    Ready=False
+
+with:
+
+    NetworkPluginNotReady
+    cni plugin not initialized
+
+The problem was caused by the AWS VPC CNI not having the required AWS permissions.
 
 ---
 
-## Why Managed Node Group
+## EKS Pod Identity
 
-Managed Node Groups were selected instead of self-managed EC2 worker nodes.
+EKS Pod Identity is used to provide AWS permissions directly to Kubernetes workloads without relying on the EC2 worker node IAM Role.
 
-### Managed Node Group
+For the AWS VPC CNI, a dedicated IAM Role was created.
 
-AWS manages significant parts of the worker node lifecycle.
+Terraform resource:
 
-Advantages:
+    aws_iam_role.vpc_cni
 
-- less operational overhead
-- integration with EKS
-- simpler node lifecycle management
-- easier initial setup
+AWS Role name:
 
-Disadvantages:
+    petclinic-vpc-cni-role
 
-- less control than fully self-managed nodes
-- AWS-specific implementation
-- some node lifecycle decisions remain controlled by AWS
+The role trusts:
 
-### Self-managed Nodes
+    pods.eks.amazonaws.com
 
-An alternative would be to manage:
+with:
 
-    EC2
-    Launch Template
-    Auto Scaling Group
-    IAM Instance Profile
-    bootstrap configuration
-    node lifecycle
+    sts:AssumeRole
+    sts:TagSession
 
-This provides more control but increases operational responsibility.
+The role has:
 
-Managed Node Groups are preferred for the current learning environment.
+    AmazonEKS_CNI_Policy
+
+Mental model:
+
+    Kubernetes Pod
+        |
+        | ServiceAccount
+        v
+    aws-node
+        |
+        | EKS Pod Identity
+        v
+    petclinic-vpc-cni-role
+        |
+        | AmazonEKS_CNI_Policy
+        v
+    AWS EC2 / VPC APIs
+
+The worker node IAM Role is therefore not used to provide the VPC CNI with its AWS permissions.
+
+---
+
+## EKS Pod Identity Association
+
+The IAM Role is associated with the `aws-node` Kubernetes ServiceAccount.
+
+Terraform resource:
+
+    aws_eks_pod_identity_association.vpc_cni
+
+Configuration:
+
+    cluster_name:
+    petclinic-eks
+
+    namespace:
+    kube-system
+
+    service_account:
+    aws-node
+
+    role:
+    petclinic-vpc-cni-role
+
+Mental model:
+
+    EKS Cluster
+        |
+        +-- namespace: kube-system
+                |
+                +-- ServiceAccount: aws-node
+                        |
+                        +-- Pod Identity Association
+                                |
+                                v
+                        petclinic-vpc-cni-role
+
+The association tells EKS which IAM Role should be provided to Pods using the specified ServiceAccount.
+
+---
+
+## EKS Pod Identity Agent
+
+EKS Pod Identity requires the EKS Pod Identity Agent to be available on the worker nodes.
+
+The agent is installed as an EKS managed add-on.
+
+Terraform resource:
+
+    aws_eks_addon.pod_identity_agent
+
+Configuration:
+
+    addon_name = "eks-pod-identity-agent"
+
+The value:
+
+    eks-pod-identity-agent
+
+is the AWS-defined name of the EKS add-on.
+
+Terraform does not infer which add-on to install.
+
+The `addon_name` explicitly identifies the AWS-managed EKS add-on that should be installed.
+
+Architecture:
+
+    Kubernetes Pod
+        |
+        | ServiceAccount
+        v
+    EKS Pod Identity
+        |
+        v
+    Pod Identity Agent
+        |
+        v
+    IAM Role
+        |
+        v
+    AWS APIs
+
+The Pod Identity Agent is therefore a required infrastructure component for the Pod Identity mechanism used by the `aws-node` Pod.
+
+---
+
+## Why the Pod Identity Agent Was Not Present Initially
+
+The EKS cluster itself does not automatically install every available EKS add-on.
+
+Creating an EKS cluster and Managed Node Group does not mean that optional EKS add-ons are automatically enabled.
+
+The Pod Identity Agent therefore had to be explicitly added:
+
+    resource "aws_eks_addon" "pod_identity_agent" {
+      cluster_name = aws_eks_cluster.main.name
+      addon_name   = "eks-pod-identity-agent"
+    }
+
+This makes the dependency explicit and keeps the infrastructure reproducible through Terraform.
+
+---
+
+## AWS VPC CNI IAM Configuration
+
+The final configuration contains a dedicated IAM Role:
+
+    petclinic-vpc-cni-role
+
+with:
+
+    Trust:
+    pods.eks.amazonaws.com
+
+and:
+
+    Permission:
+    AmazonEKS_CNI_Policy
+
+The Pod Identity Association connects this role with:
+
+    kube-system/aws-node
+
+The architecture is:
+
+    aws-node Pod
+        |
+        | ServiceAccount: aws-node
+        v
+    EKS Pod Identity Association
+        |
+        v
+    petclinic-vpc-cni-role
+        |
+        +-- AmazonEKS_CNI_Policy
+        |
+        v
+    AWS EC2 / VPC APIs
+
+---
+
+## Control Plane vs Worker Nodes vs Pod IAM
+
+The architecture now separates three different levels of AWS permissions.
+
+### EKS Control Plane
+
+    EKS Control Plane
+            |
+            v
+    petclinic-eks-cluster-role
+            |
+            v
+    AmazonEKSClusterPolicy
+
+### EC2 Worker Nodes
+
+    EC2 Worker Node
+            |
+            v
+    petclinic-eks-node-role
+            |
+            +-- AmazonEKSWorkerNodePolicy
+            +-- AmazonEC2ContainerRegistryPullOnly
+
+### Kubernetes Pod
+
+    aws-node Pod
+            |
+            v
+    EKS Pod Identity
+            |
+            v
+    petclinic-vpc-cni-role
+            |
+            v
+    AmazonEKS_CNI_Policy
+
+This avoids using the node IAM Role as a general-purpose identity for Kubernetes workloads.
+
+---
+
+## Why Not Give the CNI Permissions Through the Node Role
+
+An alternative would be to attach:
+
+    AmazonEKS_CNI_Policy
+
+directly to:
+
+    petclinic-eks-node-role
+
+This was not selected.
+
+The reason is separation of responsibilities.
+
+The EC2 Node IAM Role represents the worker node.
+
+The AWS VPC CNI is a Kubernetes workload running on that node.
+
+Using EKS Pod Identity allows the CNI to receive its permissions through its Kubernetes ServiceAccount instead of granting additional AWS permissions to every worker node.
+
+This provides a cleaner IAM model and better separation of permissions.
 
 ---
 
@@ -392,7 +639,12 @@ The architecture separates AWS permissions by responsibility.
         |
         +-- EKS Node Role
 
-The same IAM Role is not shared between the control plane and worker nodes.
+
+    Kubernetes Pod
+        |
+        +-- Pod Identity Role
+
+The same IAM Role is not shared between the control plane, worker nodes, and the AWS VPC CNI.
 
 The current configuration intentionally uses AWS managed policies to simplify the initial EKS implementation.
 
@@ -430,6 +682,20 @@ The control plane and worker nodes have different responsibilities and therefore
 
 Separate roles provide better isolation and follow the principle of least privilege.
 
+### AWS VPC CNI Permissions Through Node IAM Role
+
+Rejected.
+
+Attaching `AmazonEKS_CNI_Policy` directly to the worker node role would give every worker node the CNI permissions.
+
+Instead, EKS Pod Identity is used so that the `aws-node` Pod receives a dedicated IAM Role.
+
+### IAM Roles for Service Accounts (IRSA)
+
+Considered but not selected for the current implementation.
+
+EKS Pod Identity provides a simpler mechanism for associating IAM Roles with Kubernetes ServiceAccounts without requiring the same OIDC provider configuration used by IRSA.
+
 ---
 
 ## Consequences
@@ -442,8 +708,12 @@ Separate roles provide better isolation and follow the principle of least privil
 - Worker nodes are deployed in private subnets.
 - Worker nodes span two Availability Zones.
 - Nodes can access the Internet through the existing NAT Gateway.
+- AWS VPC CNI has its own dedicated IAM Role.
+- Kubernetes Pods can receive AWS permissions through EKS Pod Identity.
+- The EKS Pod Identity Agent is managed as an EKS add-on.
+- The node IAM Role does not need to contain the VPC CNI permissions.
 - The infrastructure is fully managed through Terraform.
-- The architecture is suitable as a foundation for future Kubernetes workloads.
+- The architecture provides a clean foundation for future Kubernetes workloads requiring AWS API access.
 
 ### Negative
 
@@ -452,6 +722,56 @@ Separate roles provide better isolation and follow the principle of least privil
 - Worker nodes depend on the existing NAT Gateway for outbound Internet access.
 - The current NAT architecture is not fully redundant.
 - AWS managed IAM policies may provide broader permissions than a fully customized least-privilege model.
+- EKS Pod Identity introduces an additional component: the Pod Identity Agent.
+
+---
+
+## Problem Encountered During Implementation
+
+The initial worker nodes were created successfully but remained:
+
+    NotReady
+
+The node reported:
+
+    NetworkPluginNotReady
+
+and:
+
+    cni plugin not initialized
+
+Inspection of the `aws-node` Pod showed:
+
+    MissingIAMPermissions
+
+with:
+
+    Unauthorized operation:
+    failed to call ec2:DescribeNetworkInterfaces
+    due to missing permissions
+
+The AWS VPC CNI container repeatedly failed its health probes:
+
+    timeout: failed to connect service ":50051" within 5s
+
+The root cause was that the AWS VPC CNI did not have the required IAM permissions.
+
+The following components were then introduced:
+
+    EKS Pod Identity Agent
+            |
+            v
+    EKS Pod Identity Association
+            |
+            v
+    petclinic-vpc-cni-role
+            |
+            v
+    AmazonEKS_CNI_Policy
+
+After the configuration was applied and the `aws-node` Pods restarted, the CNI successfully initialized and the worker node transitioned to:
+
+    Ready
 
 ---
 
@@ -469,29 +789,63 @@ The Kubernetes cluster can be accessed using:
 
 Kubernetes node availability is validated using:
 
-    kubectl get nodes
+    kubectl get nodes -o wide
 
 Expected state:
+
+    NAME                                           STATUS   ROLES    AGE
+    ip-10-0-10-xxx.eu-central-1.compute.internal  Ready    <none>   ...
+    ip-10-0-11-xxx.eu-central-1.compute.internal  Ready    <none>   ...
+
+The AWS VPC CNI can be inspected using:
+
+    kubectl get pods -n kube-system -l k8s-app=aws-node
+
+The Pod Identity Agent can be inspected using:
+
+    kubectl get pods -n kube-system
+
+The Pod Identity association can be inspected using:
+
+    aws eks list-pod-identity-associations \
+      --cluster-name petclinic-eks \
+      --region eu-central-1
+
+The association can be inspected using:
+
+    aws eks describe-pod-identity-association \
+      --cluster-name petclinic-eks \
+      --association-id <association-id> \
+      --region eu-central-1
+
+The IAM policies attached to the VPC CNI role can be inspected using:
+
+    aws iam list-attached-role-policies \
+      --role-name petclinic-vpc-cni-role
+
+The IAM trust policy can be inspected using:
+
+    aws iam get-role \
+      --role-name petclinic-vpc-cni-role \
+      --query 'Role.AssumeRolePolicyDocument'
+
+The AWS VPC CNI logs can be inspected using:
+
+    kubectl logs <aws-node-pod> -n kube-system -c aws-node
+
+The final result is:
 
     EKS Cluster
         |
         +-- Control Plane
         |
-        +-- Node Group
-            |
-            +-- Node   Ready
-            |
-            +-- Node   Ready
+        +-- Managed Node Group
+              |
+              +-- Node   Ready
+              |
+              +-- Node   Ready
 
-AWS infrastructure can also be inspected using:
-
-    aws eks describe-cluster
-
-    aws eks describe-nodegroup
-
-Terraform state can be inspected using:
-
-    terraform state list
+The worker nodes are now ready to run Kubernetes workloads.
 
 ---
 
@@ -507,40 +861,57 @@ Terraform state can be inspected using:
     |   |     +-- AmazonEKSClusterPolicy
     |   |
     |   +-- EKS Node Role
+    |   |     |
+    |   |     +-- Trust: ec2.amazonaws.com
+    |   |     +-- AmazonEKSWorkerNodePolicy
+    |   |     +-- AmazonEC2ContainerRegistryPullOnly
+    |   |
+    |   +-- VPC CNI Role
     |         |
-    |         +-- Trust: ec2.amazonaws.com
-    |         +-- AmazonEKSWorkerNodePolicy
-    |         +-- AmazonEC2ContainerRegistryPullOnly
+    |         +-- Trust: pods.eks.amazonaws.com
+    |         +-- AmazonEKS_CNI_Policy
     |
     +-- VPC
+    |   |
+    |   +-- public_a
+    |   |
+    |   +-- public_b
+    |   |
+    |   +-- private_a
+    |   |     |
+    |   |     +-- EKS Node
+    |   |
+    |   +-- private_b
+    |         |
+    |         +-- EKS Node
+    |
+    +-- NAT Gateway
+    |
+    +-- Internet Gateway
+    |
+    +-- EKS
         |
-        +-- public_a
+        +-- Control Plane
         |
-        +-- public_b
+        +-- Pod Identity Agent
         |
-        +-- private_a
-        |     |
-        |     +-- EKS Node
-        |
-        +-- private_b
+        +-- Managed Node Group
               |
-              +-- EKS Node
-
-        |
-        +-- NAT Gateway
-        |
-        +-- Internet Gateway
-
-
-    EKS
-    |
-    +-- Control Plane
-    |
-    +-- Managed Node Group
-          |
-          +-- EC2 Node
-          |
-          +-- EC2 Node
+              +-- EC2 Node
+              |     |
+              |     +-- aws-node
+              |           |
+              |           +-- EKS Pod Identity
+              |                 |
+              |                 +-- petclinic-vpc-cni-role
+              |
+              +-- EC2 Node
+                    |
+                    +-- aws-node
+                          |
+                          +-- EKS Pod Identity
+                                |
+                                +-- petclinic-vpc-cni-role
 
 ---
 
@@ -548,7 +919,7 @@ Terraform state can be inspected using:
 
 The next stage is to understand and implement Kubernetes workloads on EKS.
 
-Before deploying the application, the following topics should be investigated:
+The following topics should be investigated:
 
 - how EKS nodes register with the Control Plane
 - how kubelet communicates with the Kubernetes API
@@ -558,6 +929,10 @@ Before deploying the application, the following topics should be investigated:
 - Kubernetes Service Accounts
 - IAM access from Pods
 - EKS Pod Identity
+- Kubernetes Services
+- Ingress and AWS Load Balancers
+- application deployment on EKS
+- GitOps deployment to EKS
 
 After the Kubernetes fundamentals are validated, the existing local GitOps architecture can be migrated towards EKS.
 
@@ -578,6 +953,21 @@ The architecture separates responsibilities:
         |
         +-- Node IAM Role
 
+
+    AWS VPC CNI Pod
+        |
+        +-- EKS Pod Identity
+                |
+                +-- VPC CNI IAM Role
+
 Worker nodes run in private subnets across two Availability Zones.
 
-The current platform provides the foundation for running Kubernetes workloads on AWS while keeping infrastructure provisioning reproducible through Terraform.
+The AWS VPC CNI receives its required AWS permissions through EKS Pod Identity instead of through the worker node IAM Role.
+
+The EKS Pod Identity Agent is installed as an EKS managed add-on and enables this identity mechanism.
+
+The worker nodes successfully transition to:
+
+    Ready
+
+The current platform therefore provides the foundation for running Kubernetes workloads on AWS while keeping infrastructure provisioning and IAM configuration reproducible through Terraform.
