@@ -27,3 +27,7 @@ kubectl wait \
   --timeout="$ARGOCD_TIMEOUT"
 
 echo "Argo CD installation completed"
+
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d
+echo
