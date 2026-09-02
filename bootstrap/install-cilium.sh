@@ -1,23 +1,16 @@
-# cilium-values.yaml
-#
-# EKS + AWS VPC CNI + Cilium CNI chaining
-#
-# AWS VPC CNI remains responsible for:
-# - pod networking
-# - VPC integration
-# - IPAM
-#
-# Cilium provides:
-# - eBPF datapath
-# - NetworkPolicy enforcement
-# - network visibility
+#!/usr/bin/env bash
+set -euo pipefail
 
-cni:
-  chainingMode: aws-cni
-  exclusive: false
+echo "Installing Cilium with AWS VPC CNI chaining"
 
-routingMode: native
+cilium install \
+  --version 1.20.1 \
+  --set cni.chainingMode=aws-cni \
+  --set cni.exclusive=false \
+  --set routingMode=native \
+  --set enableIPv4Masquerade=false \
+  --set kubeProxyReplacement=false
 
-enableIPv4Masquerade: false
+echo "Waiting for Cilium to be ready"
 
-kubeProxyReplacement: false
+cilium status --wait
