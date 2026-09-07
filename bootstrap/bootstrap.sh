@@ -6,4 +6,5 @@ echo "=== Platform bootstrap ==="
 ./bootstrap/install-argocd.sh
 
 echo "=== GitOps applications bootstrap ==="
-./bootstrap/install-gitops-applications.sh
+./bootstrap/install-ingress-nginx.sh
+./bootstrap/install-aws-load-balancer.sh
