@@ -22,7 +22,33 @@ resource "aws_eks_node_group" "main" {
     max_size     = 3
   }
 
+  launch_template {
+    id      = aws_launch_template.eks_nodes.id
+    version = aws_launch_template.eks_nodes.latest_version
+  }
+
   tags = {
     Name = "petclinic-eks-node"
+  }
+}
+
+# additional configuration for the EKS node group to use a launch template
+resource "aws_launch_template" "eks_nodes" {
+  name_prefix = "petclinic-eks-nodes-"
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    # Set to 2 to allow the node to retrieve instance metadata 
+    # in order for the AWS Load Balancer Controller be able to retrieve the vpc-id
+    http_put_response_hop_limit = 2
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "petclinic-eks-node"
+    }
   }
 }
