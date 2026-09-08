@@ -17,3 +17,8 @@ output "test_instance_private_ip" {
   description = "Private IPv4 address of the test EC2 instance."
   value       = aws_instance.test.private_ip
 }
+
+output "rds_endpoint" {
+  value = aws_db_instance.postgres.endpoint
+}
+
