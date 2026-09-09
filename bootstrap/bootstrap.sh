@@ -12,7 +12,7 @@ echo "=== AWS platform components ==="
 ./bootstrap/install-aws-secrets-store.sh
 ./bootstrap/install-aws-secrets-manager.sh
 # Need a minute here
-sleep 2m
+sleep 3m
 ./bootstrap/install-aws-cluster-secrets-store.sh
 ./bootstrap/install-argo-rollouts.sh
 

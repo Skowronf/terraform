@@ -11,7 +11,7 @@ resource "aws_secretsmanager_secret_version" "petclinic_database" {
   secret_id = aws_secretsmanager_secret.petclinic_database.id
 
   secret_string = jsonencode({
-    host     = aws_db_instance.postgres.address
+    host     = "jdbc:postgresql://${aws_db_instance.postgres.address}:5432/petclinic"
     port     = 5432
     database = "petclinic"
     username = "petclinic"
