@@ -10,7 +10,3 @@ echo "Installing AWS GitOps Applications"
 
 kubectl apply -f \
   "${GITOPS_REPO}/raw/${GITOPS_REVISION}/${GITOPS_PATH}/"
-
-# Add for now
-# kubectl apply -f \
-#   "${GITOPS_REPO}/raw/${GITOPS_REVISION}/aws/cluster-secret-store.yaml"
