@@ -7,7 +7,7 @@ echo "=== Platform bootstrap ==="
 ./bootstrap/install-argocd.sh
 
 echo "=== AWS platform components ==="
-
+# Once stabilized remove below and use gitops-bootstrap.sh instead
 ./bootstrap/install-aws-load-balancer.sh
 ./bootstrap/install-aws-secrets-store.sh
 ./bootstrap/install-aws-secrets-manager.sh
@@ -16,9 +16,6 @@ sleep 3m
 ./bootstrap/install-aws-cluster-secrets-store.sh
 ./bootstrap/install-argo-rollouts.sh
 
-echo "=== Networking / ingress ==="
-
-./bootstrap/install-ingress-nginx.sh
 
 echo "=== Applications ==="
 
