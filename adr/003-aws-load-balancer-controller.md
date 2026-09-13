@@ -30,6 +30,8 @@ Because it needs to communicate with AWS APIs, it requires an AWS IAM identity.
 
 The project already uses EKS Pod Identity for the AWS VPC CNI, so the same mechanism is used for the AWS Load Balancer Controller.
 
+The application will not use ingress-nginx. The AWS Load Balancer Controller will provide the external load-balancing and HTTP/HTTPS ingress functionality directly through AWS Application Load Balancers.
+
 ---
 
 ## Decision
@@ -97,9 +99,13 @@ Conceptually:
             v
     AWS Load Balancer
 
-The controller does not replace Kubernetes Ingress.
+The controller provides the AWS integration required to turn Kubernetes networking resources into AWS load-balancing infrastructure.
 
-Instead, it provides the AWS integration required to turn Kubernetes networking resources into AWS load-balancing infrastructure.
+For HTTP/HTTPS traffic, Kubernetes Ingress resources can be handled directly by the AWS Load Balancer Controller and mapped to an AWS Application Load Balancer.
+
+For service-level load balancing, Kubernetes Services of type `LoadBalancer` can be used to provision AWS load-balancing resources.
+
+No additional ingress controller such as ingress-nginx is required.
 
 ---
 
@@ -141,7 +147,7 @@ For example:
             |
             | create/update
             v
-    AWS Load Balancer
+    AWS Application Load Balancer
 
 If the Load Balancer is modified or removed outside Kubernetes, the controller can detect the difference and reconcile the infrastructure.
 
@@ -346,7 +352,7 @@ An alternative would be:
 
 This was rejected.
 
-It would mean that every workload running on the node could potentially inherit or use permissions intended specifically for the Load Balancer Controller.
+It would mean that workloads running on the node could potentially inherit or use permissions intended specifically for the Load Balancer Controller.
 
 Instead:
 
@@ -421,11 +427,155 @@ This avoids mixing AWS infrastructure management with Kubernetes application man
 
 ---
 
-## Controller vs NGINX Ingress
+## AWS Load Balancer Controller as the Ingress Layer
 
-The AWS Load Balancer Controller and ingress-nginx have different responsibilities.
+The project does not use ingress-nginx.
+
+The AWS Load Balancer Controller provides the external ingress functionality directly through AWS Application Load Balancer.
 
 The intended architecture is:
+
+    Internet
+        |
+        v
+    AWS Application Load Balancer
+        |
+        v
+    Kubernetes Service
+        |
+        v
+    Petclinic Pods
+
+For HTTP/HTTPS traffic, the Kubernetes Ingress resource defines the desired routing configuration.
+
+The AWS Load Balancer Controller observes the Ingress and creates or updates the corresponding AWS Application Load Balancer resources.
+
+Conceptually:
+
+    Kubernetes Ingress
+            |
+            v
+    AWS Load Balancer Controller
+            |
+            v
+    AWS Application Load Balancer
+            |
+            v
+    Kubernetes Service
+            |
+            v
+    Petclinic Pods
+
+There is no intermediate NGINX controller.
+
+This reduces the number of components in the request path and removes the need to maintain a separate Kubernetes HTTP ingress controller.
+
+---
+
+## Kubernetes Ingress
+
+The application can use a Kubernetes Ingress handled directly by the AWS Load Balancer Controller.
+
+The Ingress should use:
+
+    ingressClassName: alb
+
+This explicitly identifies the AWS Load Balancer Controller as the controller responsible for the resource.
+
+Example:
+
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: petclinic
+      namespace: petclinic
+    spec:
+      ingressClassName: alb
+
+The AWS Load Balancer Controller then reconciles the Ingress with an AWS Application Load Balancer.
+
+Conceptually:
+
+    Ingress
+        |
+        | ingressClassName: alb
+        v
+    AWS Load Balancer Controller
+        |
+        v
+    AWS Application Load Balancer
+        |
+        v
+    Kubernetes Service
+        |
+        v
+    Petclinic Pods
+
+---
+
+## Application Networking Architecture
+
+The target architecture is:
+
+    Internet
+        |
+        v
+    AWS Application Load Balancer
+        |
+        v
+    Kubernetes Service
+        |
+        v
+    Petclinic Pods
+        |
+        v
+    PostgreSQL RDS
+
+The AWS Load Balancer Controller manages the AWS Application Load Balancer.
+
+The Kubernetes Service provides the internal application endpoint.
+
+The Petclinic application provides the actual workload.
+
+RDS provides the database.
+
+Each component therefore has a separate responsibility.
+
+---
+
+## Load Balancer Targeting
+
+The AWS Load Balancer Controller can integrate the AWS Application Load Balancer directly with Kubernetes workloads.
+
+The exact target configuration depends on the selected controller configuration and annotations.
+
+The important architectural principle is that the AWS Load Balancer is managed from Kubernetes declarative resources rather than being manually created.
+
+Conceptually:
+
+    Kubernetes Ingress
+            |
+            v
+    AWS Load Balancer Controller
+            |
+            v
+    ALB Listener / Rules
+            |
+            v
+    Target Group
+            |
+            v
+    Kubernetes Application
+
+This allows the Kubernetes resource to remain the source of truth for the desired application-facing load-balancing configuration.
+
+---
+
+## Why Not Use ingress-nginx
+
+ingress-nginx was considered as a separate Kubernetes HTTP ingress layer but is not required for the selected architecture.
+
+Using ingress-nginx would introduce an additional component:
 
     Internet
         |
@@ -439,83 +589,33 @@ The intended architecture is:
     Kubernetes Service
         |
         v
-    Application Pod
+    Petclinic Pods
 
-The AWS Load Balancer Controller is responsible for the AWS-facing layer.
+This would require:
 
-The ingress-nginx controller is responsible for the Kubernetes HTTP routing layer.
+- an additional Kubernetes controller
+- an additional Deployment
+- an additional Service
+- additional configuration
+- additional monitoring and upgrades
+- an additional network hop
 
-Conceptually:
+The selected architecture removes this layer:
 
-    AWS Load Balancer Controller
-            |
-            | AWS layer
-            v
-        AWS ALB/NLB
-            |
-            v
-        ingress-nginx
-            |
-            | Kubernetes layer
-            v
-        Services
-            |
-            v
-        Pods
-
-The two controllers therefore solve different problems.
-
----
-
-## Current ingress-nginx Configuration
-
-The existing ingress-nginx deployment uses:
-
-    kind: Deployment
-
-with:
-
-    replicaCount: 2
-
-and:
-
-    service:
-      type: ClusterIP
-
-This means ingress-nginx is not directly exposed to the Internet through a Kubernetes LoadBalancer Service.
-
-Instead, the intended architecture is for an AWS Load Balancer to provide the external entry point.
-
-The AWS Load Balancer Controller will manage that AWS-facing resource.
-
----
-
-## Kubernetes Ingress
-
-The application already contains a Kubernetes Ingress:
-
-    apiVersion: networking.k8s.io/v1
-    kind: Ingress
-
-with:
-
-    ingressClassName: nginx
-
-This means the Ingress is currently intended to be handled by ingress-nginx.
-
-The AWS Load Balancer Controller does not automatically mean that this Ingress will be managed by AWS.
-
-The `ingressClassName` determines which controller should process the resource.
-
-Therefore the current application routing model remains:
-
-    Ingress
+    Internet
         |
-        | ingressClassName: nginx
         v
-    ingress-nginx
+    AWS Application Load Balancer
+        |
+        v
+    Kubernetes Service
+        |
+        v
+    Petclinic Pods
 
-The AWS Load Balancer Controller will provide the AWS-facing integration required by the final architecture.
+The AWS Load Balancer Controller already provides the required AWS integration and can handle Kubernetes Ingress resources directly.
+
+Therefore ingress-nginx is not part of the target architecture.
 
 ---
 
@@ -581,7 +681,7 @@ The process is:
     Controller watches Kubernetes API
             |
             v
-    Kubernetes Service / Ingress created
+    Kubernetes Ingress created
             |
             v
     Controller reconciles resource
@@ -590,44 +690,11 @@ The process is:
     AWS API
             |
             v
-    AWS Load Balancer
+    AWS Application Load Balancer
 
 Therefore the controller is infrastructure that enables future AWS Load Balancer creation.
 
 It does not create a Load Balancer simply because the controller itself exists.
-
----
-
-## Application Networking Architecture
-
-The target architecture is:
-
-    Internet
-        |
-        v
-    AWS Load Balancer
-        |
-        v
-    ingress-nginx
-        |
-        v
-    Kubernetes Service
-        |
-        v
-    Petclinic Pods
-        |
-        v
-    PostgreSQL RDS
-
-The AWS Load Balancer Controller manages the AWS Load Balancer.
-
-The ingress-nginx controller manages HTTP routing inside Kubernetes.
-
-The Petclinic application provides the actual workload.
-
-RDS provides the database.
-
-Each component therefore has a separate responsibility.
 
 ---
 
@@ -721,6 +788,14 @@ The controller is a Kubernetes platform component and should be managed through 
 
 Argo CD provides version-controlled, declarative deployment and automatic reconciliation.
 
+### ingress-nginx
+
+Rejected.
+
+A separate NGINX ingress controller is unnecessary because the AWS Load Balancer Controller can handle Kubernetes Ingress resources directly and provision an AWS Application Load Balancer.
+
+Removing ingress-nginx simplifies the architecture and reduces the number of components involved in the external traffic path.
+
 ---
 
 ## Consequences
@@ -736,16 +811,20 @@ Argo CD provides version-controlled, declarative deployment and automatic reconc
 - Kubernetes controller deployment remains managed by Argo CD.
 - The architecture separates infrastructure management from Kubernetes workload management.
 - The controller can manage AWS ALBs/NLBs required by Kubernetes workloads.
+- Kubernetes Ingress resources can be handled directly by the AWS Load Balancer Controller.
+- No additional ingress controller is required.
+- The external traffic path contains fewer components.
+- The architecture avoids maintaining a separate NGINX deployment and configuration.
 - The controller supports AWS-specific integrations such as security groups, target groups, ACM, WAF and Shield.
 
 ### Negative
 
-- The platform now depends on an additional Kubernetes controller.
+- The platform depends on the AWS Load Balancer Controller.
 - The controller requires a relatively broad IAM policy.
 - AWS-specific functionality introduces some vendor coupling.
-- Load Balancer behavior depends on correct Kubernetes configuration.
+- Load Balancer behavior depends on correct Kubernetes configuration and controller annotations.
 - The controller introduces another component that must be monitored and upgraded.
-- The complete traffic path cannot be validated until the application workload is deployed.
+- The complete traffic path cannot be validated until the application workload and Ingress are deployed.
 
 ---
 
@@ -782,6 +861,10 @@ The attached policy can be checked using:
 
     aws iam list-attached-role-policies \
       --role-name petclinic-aws-load-balancer-controller
+
+The Kubernetes Ingress can be checked using:
+
+    kubectl get ingress -A
 
 The controller should be running successfully before deploying Kubernetes resources that depend on AWS Load Balancing.
 
@@ -827,6 +910,8 @@ The controller has the required AWS identity through EKS Pod Identity.
 
 The controller is ready to react to Kubernetes resources that require AWS Load Balancer functionality.
 
+No ingress-nginx controller is part of the target architecture.
+
 ---
 
 ## Next Steps
@@ -846,24 +931,27 @@ The application deployment should establish:
         v
     PostgreSQL RDS
 
-After the application is running and can communicate with RDS, the external traffic path can be configured and validated:
+After the application is running and can communicate with RDS, the external traffic path can be configured and validated using a Kubernetes Ingress:
 
     Internet
         |
         v
-    AWS Load Balancer
+    AWS Application Load Balancer
         |
         v
-    ingress-nginx
-        |
-        v
-    Petclinic Service
+    Kubernetes Service
         |
         v
     Petclinic Pods
         |
         v
     PostgreSQL RDS
+
+The Ingress should be configured with:
+
+    ingressClassName: alb
+
+This will allow the AWS Load Balancer Controller to create and manage the corresponding AWS Application Load Balancer.
 
 This will allow the complete AWS application path to be validated.
 
@@ -898,5 +986,9 @@ Argo CD manages the Kubernetes-side controller deployment.
 The worker node IAM Role is not used by the controller.
 
 The controller is now ready to react to Kubernetes resources that require AWS Load Balancer functionality.
+
+The target application architecture does not use ingress-nginx.
+
+Instead, Kubernetes Ingress resources are handled directly by the AWS Load Balancer Controller, which provisions and manages the AWS Application Load Balancer.
 
 The actual AWS Load Balancer will be created only when an appropriate Kubernetes resource is deployed and configured to be handled by the AWS Load Balancer Controller.
