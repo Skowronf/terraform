@@ -15,7 +15,7 @@ echo "=== AWS platform components ==="
 sleep 3m
 ./bootstrap/install-aws-cluster-secrets-store.sh
 ./bootstrap/install-argo-rollouts.sh
-
+./bootstrap/install-aws-external-dns.sh
 
 echo "=== Applications ==="
 

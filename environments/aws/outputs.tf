@@ -26,4 +26,9 @@ output "rds_address" {
   value = aws_db_instance.postgres.address
 }
 
+output "route53_zone_id" {
+  description = "Route 53 hosted zone ID for petclinic.website."
+  value       = data.aws_route53_zone.petclinic.zone_id
+}
+
 
