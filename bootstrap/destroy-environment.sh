@@ -64,4 +64,26 @@ fi
 
 echo "==> Kubernetes-owned AWS resources cleaned up"
 
+
+
+# -------------------------------------------------------------------
+# Delete AWS records And AAAA from Route53.
+#
+# Workaround since external DNS does not delete the records when the ALB is deleted.
+# Something with TXT ownership records is not working properly.
+# -------------------------------------------------------------------
+
+echo "==> Removing A/AAAA resources from Route53"
+
+ZONE_ID=$(aws route53 list-hosted-zones \
+  --query 'HostedZones[0].Id' \
+  --output text | sed 's|/hostedzone/||') && \
+aws route53 change-resource-record-sets \
+  --hosted-zone-id "$ZONE_ID" \
+  --change-batch "$(aws route53 list-resource-record-sets \
+    --hosted-zone-id "$ZONE_ID" \
+    --query 'ResourceRecordSets[?Type==`A` || Type==`AAAA`] | {Changes: [].{Action:`DELETE`,ResourceRecordSet:@}}' \
+    --output json)"
+
+
 echo "==> Ready for terraform destroy"
