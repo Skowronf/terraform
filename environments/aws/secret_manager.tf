@@ -11,6 +11,8 @@ resource "aws_secretsmanager_secret_version" "petclinic_database" {
   secret_id = aws_secretsmanager_secret.petclinic_database.id
 
   secret_string = jsonencode({
+    # TODO  - change host to aws_db_instance.postgres.address 
+    # and build the JDBC URL dynamically in k8s deployment manifest.
     host     = "jdbc:postgresql://${aws_db_instance.postgres.address}:5432/petclinic"
     port     = 5432
     database = "petclinic"
