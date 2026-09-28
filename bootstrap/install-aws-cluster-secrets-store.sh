@@ -4,7 +4,7 @@ set -euo pipefail
 
 readonly GITOPS_REPO="https://github.com/Skowronf/kubernetes"
 readonly GITOPS_REVISION="main"
-readonly GITOPS_PATH="aws-platform/cluster-secret-store.yml"
+readonly GITOPS_PATH="bootstrap/aws/cluster-secret-store.yml"
 
 echo "Installing AWS cluster-secret-store Argo CD Application"
 
