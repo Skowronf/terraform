@@ -8,8 +8,6 @@ Terraform infrastructure for the Spring PetClinic application running on Amazon 
 
 The project uses an **ephemeral environment** that can be quickly created for development/testing and completely destroyed when no longer needed.
 
----
-
 ## Infrastructure
 
 - AWS VPC
@@ -22,8 +20,6 @@ The project uses an **ephemeral environment** that can be quickly created for de
 - ExternalDNS
 - External Secrets Operator
 - EKS Pod Identity
-
----
 
 ## Deployment
 
@@ -38,8 +34,6 @@ Create the complete ephemeral environment:
 Destroy the complete environment:
 
     ./bootstrap/destroy-environment.sh
-
----
 
 ## Architecture
 
