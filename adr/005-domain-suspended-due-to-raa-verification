@@ -1,0 +1,71 @@
+# ADR-005: Domain Suspended Due to RAA Verification
+
+## Status
+
+Accepted
+
+---
+
+## Context
+
+The `petclinic.website` domain is registered through cyber_Folks and uses external AWS Route53 DNS servers.
+
+The AWS infrastructure and Kubernetes application are operational, and the Route53 hosted zone contains the correct DNS records pointing to the AWS Application Load Balancer.
+
+However, the domain is currently not publicly reachable.
+
+DNS trace shows that the public delegation points to:
+
+    ns1.verification-hold.suspended-domain.com
+    ns2.verification-hold.suspended-domain.com
+
+instead of the configured Route53 name servers.
+
+The cyber_Folks domain panel indicates:
+
+    Domena zweryfikowana: Nie
+
+The domain therefore appears to be suspended due to incomplete RAA (Registrant Agreement/Verification) verification.
+
+---
+
+## Decision
+
+The domain suspension is treated as a registrar-level issue, not an AWS, Kubernetes, ArgoCD, Ingress, or ExternalDNS issue.
+
+The required action is to complete the RAA verification for the domain owner through cyber_Folks.
+
+After successful verification, the domain should resume using the configured Route53 name servers:
+
+    ns-796.awsdns-35.net
+    ns-1897.awsdns-45.co.uk
+    ns-1272.awsdns-31.org
+    ns-382.awsdns-47.com
+
+No changes to the Kubernetes or AWS application configuration are required.
+
+---
+
+## Validation
+
+The AWS ALB and application were verified independently using:
+
+    curl --resolve petclinic.website:443:<ALB-IP> \
+      https://petclinic.website/
+
+The request returned:
+
+    HTTP/2 200
+
+This confirms that the application, ALB, HTTPS certificate, Ingress and backend are operational.
+
+The remaining issue is the public DNS delegation caused by the domain suspension.
+
+---
+
+## Consequences
+
+- The application remains unavailable through the normal public domain while the domain is suspended.
+- AWS infrastructure does not require changes.
+- ExternalDNS configuration remains unchanged.
+- After RAA verification, DNS propagation may be required before normal public access is restored.
